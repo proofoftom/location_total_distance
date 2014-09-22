@@ -1,0 +1,145 @@
+<?php
+/**
+ * @file The main module file that calculates and displays total driving distance
+ * Created by PhpStorm.
+ * User: Tommy
+ * Date: 7/25/14
+ * Time: 8:35 AM
+ */
+
+/**
+ * Implements hook_menu().
+ * This is used to add the module's admin in the location module's tabs.
+ * @return array
+ */
+function location_total_distance_menu() {
+  $items['admin/config/content/location/total_distance'] = array(
+    'title' => 'Total Distance',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('location_total_distance_admin'),
+    'access arguments' => array('administer site configuration'),
+    'file' => 'location_total_distance.admin.inc',
+    'type' => MENU_LOCAL_TASK,
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_node_view().
+ * Appends the markup for the total driving distance to the end of a list of node locations.
+ * @param $node
+ * @param $view_mode
+ * @param $langcode
+ */
+function location_total_distance_node_view($node, $view_mode, $langcode) {
+
+  // If we're looking at a full node and it has multiple locations listed,
+  // calculate total distance along the route from the first location to the last.
+  if (isset($node->locations) && $view_mode == 'full' && count($node->locations) > 1) {
+
+    $units = 'imperial'; // Todo: build admin to set this per node
+
+    $total_distance = _calculate_total_distance($node, $units);
+
+    // Build markup
+    $total_distance_markup = array(
+      '#type' => 'markup',
+      '#markup' => theme('location_total_distance', array(
+        'total_distance' => $total_distance,
+        'units' => ($units == 'metrics') ? 'kms' : 'miles',
+      )),
+      // Append before "add another" button
+      '#weight' => $node->content['locations']['#weight'] + .25,
+    );
+
+    // Display markup
+    $node->content['total_distance'] = $total_distance_markup;
+  }
+
+}
+
+/**
+ * Implements hook_theme().
+ * Sets template file and variables for total distance markup
+ * @param $existing
+ * @param $type
+ * @param $theme
+ * @param $path
+ * @return array
+ */
+function location_total_distance_theme($existing, $type, $theme, $path) {
+  return array(
+    'location_total_distance' => array(
+      'variables' => array(
+        'total_distance' => 0,
+        'units' => 'kms',
+      ),
+      'template' => 'location_total_distance',
+    ),
+  );
+}
+
+/**
+ * Calculates the total driving distance from the first node location to the last
+ * using Google Directions API
+ * @param $node
+ * @param $units
+ * @return float|int
+ */
+function _calculate_total_distance($node, $units) {
+  // Warn if API key isn't set, we can still make calls without it though.
+  $api_key = variable_get('location_total_distance_google_api_key', '');
+  if (empty($api_key)) {
+    watchdog(
+      'location',
+      t('There is no Directions API key set. All Directions API applications should use an API key.'),
+      NULL,
+      WATCHDOG_WARNING,
+      l('Add API Key', 'admin/config/content/location/total_distance')
+    );
+  }
+
+  $total_distance = 0;
+
+  // Remove origin and destination from array to gather waypoints for google directions api
+  $origin = array_shift($node->locations);
+  $destination = array_pop($node->locations);
+  $waypoints = array();
+
+  // Gather waypoints (points between origin and destination)
+  foreach ($node->locations as $location) {
+    array_push($waypoints, $location['street']);
+  }
+
+  // Get directions from google directions api
+  $url = 'https://maps.googleapis.com/maps/api/directions/json';
+  $options = array(
+    'query' => array(
+      'origin' => $origin['street'],
+      'destination' => $destination['street'],
+      'waypoints' => implode('|', $waypoints),
+      'units' => $units,
+      'key' => $api_key
+    )
+  );
+  $full_url = url($url, $options);
+  $response = drupal_http_request($full_url);
+  $directions = json_decode($response->data);
+
+  // Make sure there's a route then combine the distances of the legs
+  if (isset($directions->routes[0])) {
+    foreach ($directions->routes[0]->legs as $leg) {
+      if ($units == 'metrics') {
+        $total_distance += $leg->distance->value / 1000;
+      }
+      else {
+        // ->value is always returned in meters so we have to parse the text value
+        $distance_text = explode(' ', $leg->distance->text);
+        $distance = $distance_text[0];
+        $total_distance += $distance;
+      }
+    }
+  };
+
+  return $total_distance;
+}

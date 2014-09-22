@@ -1,0 +1,9 @@
+name = Location Total Driving Distance
+description = Appends the total driving distance between locations of nodes with multiple locations using Google Directions API.
+dependencies[] = location
+dependencies[] = location_node
+package = Location
+core = 7.x
+files[] = location_total_distance.module
+files[] = location_total_distance.forms.inc
+files[] = location_total_distance.tpl.php
